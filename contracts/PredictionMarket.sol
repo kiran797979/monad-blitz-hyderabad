@@ -1,172 +1,213 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+contract PredictionMarket {
+    address public owner;
+    uint256 public marketCount;
+    uint256 public platformFee = 200;
 
-contract PredictionMarket is Ownable {
-    IERC20 public immutable bettingToken;
+    mapping(uint256 => Market) public markets;
+    mapping(uint256 => mapping(address => uint256)) public yesBets;
+    mapping(uint256 => mapping(address => uint256)) public noBets;
+    mapping(uint256 => mapping(address => bool)) public claimed;
+
+    enum MarketStatus { Open, Resolved, Cancelled }
 
     struct Market {
-        uint256 battleId;
-        uint256 totalPoolA;
-        uint256 totalPoolB;
-        uint256 winner;
+        string question;
+        address creator;
+        uint256 deadline;
         MarketStatus status;
+        bool outcome;
+        uint256 totalYes;
+        uint256 totalNo;
+        uint256 feeCollected;
         uint256 createdAt;
         uint256 resolvedAt;
     }
 
-    struct Bet {
-        address bettor;
-        uint256 marketId;
-        uint256 agentId;
-        uint256 amount;
-        bool claimed;
+    event MarketCreated(uint256 indexed marketId, string question, uint256 deadline, uint256 timestamp);
+    event BetPlaced(uint256 indexed marketId, address indexed bettor, bool isYes, uint256 amount, uint256 timestamp);
+    event MarketResolved(uint256 indexed marketId, bool outcome, uint256 totalPool, uint256 platformFee, uint256 timestamp);
+    event Claimed(uint256 indexed marketId, address indexed claimer, uint256 payout, uint256 timestamp);
+    event MarketCancelled(uint256 indexed marketId, uint256 timestamp);
+
+    constructor() {
+        owner = msg.sender;
     }
 
-    enum MarketStatus {
-        Open,
-        Closed,
-        Resolved
+    receive() external payable {}
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not owner");
+        _;
     }
 
-    uint256 public nextMarketId = 1;
-    uint256 public nextBetId = 1;
-    uint256 public constant MIN_BET = 0.001 ether;
-    uint256 public platformFeePercent = 3;
+    function createMarket(string calldata question, uint256 deadline) external onlyOwner returns (uint256 marketId) {
+        require(bytes(question).length > 0, "Question required");
+        require(bytes(question).length <= 256, "Question too long");
+        require(deadline > block.timestamp, "Deadline must be future");
 
-    mapping(uint256 => Market) public markets;
-    mapping(uint256 => Bet) public bets;
-    mapping(uint256 => uint256[]) public marketBets;
-    mapping(address => uint256[]) public userBets;
+        marketId = ++marketCount;
 
-    event MarketCreated(uint256 indexed marketId, uint256 indexed battleId);
-    event BetPlaced(uint256 indexed betId, uint256 indexed marketId, address indexed bettor, uint256 agentId, uint256 amount);
-    event MarketResolved(uint256 indexed marketId, uint256 winner);
-    event PayoutClaimed(uint256 indexed betId, address indexed bettor, uint256 amount);
-
-    constructor(address _bettingToken) Ownable(msg.sender) {
-        bettingToken = IERC20(_bettingToken);
-    }
-
-    function createMarket(uint256 battleId) external onlyOwner returns (uint256) {
-        uint256 marketId = nextMarketId++;
         markets[marketId] = Market({
-            battleId: battleId,
-            totalPoolA: 0,
-            totalPoolB: 0,
-            winner: 0,
+            question: question,
+            creator: msg.sender,
+            deadline: deadline,
             status: MarketStatus.Open,
+            outcome: false,
+            totalYes: 0,
+            totalNo: 0,
+            feeCollected: 0,
             createdAt: block.timestamp,
             resolvedAt: 0
         });
 
-        emit MarketCreated(marketId, battleId);
-        return marketId;
+        emit MarketCreated(marketId, question, deadline, block.timestamp);
     }
 
-    function placeBet(uint256 marketId, uint256 agentId, uint256 amount) external returns (uint256) {
+    function placeBet(uint256 marketId, bool isYes) external payable {
         Market storage market = markets[marketId];
+
         require(market.status == MarketStatus.Open, "Market not open");
-        require(amount >= MIN_BET, "Bet below minimum");
+        require(block.timestamp < market.deadline, "Deadline passed");
+        require(msg.value > 0, "Bet required");
 
-        uint256 battleId = market.battleId;
-        require(agentId != 0, "Invalid agent");
+        if (isYes) {
+            yesBets[marketId][msg.sender] += msg.value;
+            market.totalYes += msg.value;
+        } else {
+            noBets[marketId][msg.sender] += msg.value;
+            market.totalNo += msg.value;
+        }
 
-        bettingToken.transferFrom(msg.sender, address(this), amount);
-
-        uint256 betId = nextBetId++;
-        bets[betId] = Bet({
-            bettor: msg.sender,
-            marketId: marketId,
-            agentId: agentId,
-            amount: amount,
-            claimed: false
-        });
-
-        marketBets[marketId].push(betId);
-        userBets[msg.sender].push(betId);
-
-        emit BetPlaced(betId, marketId, msg.sender, agentId, amount);
-        return betId;
+        emit BetPlaced(marketId, msg.sender, isYes, msg.value, block.timestamp);
     }
 
-    function resolveMarket(uint256 marketId, uint256 winnerAgentId) external onlyOwner {
+    function resolveMarket(uint256 marketId, bool outcome) external onlyOwner {
         Market storage market = markets[marketId];
+
         require(market.status == MarketStatus.Open, "Market not open");
 
-        market.winner = winnerAgentId;
+        uint256 totalPool = market.totalYes + market.totalNo;
+        uint256 fee = (totalPool * platformFee) / 10000;
+
+        market.outcome = outcome;
         market.status = MarketStatus.Resolved;
         market.resolvedAt = block.timestamp;
+        market.feeCollected = fee;
 
-        emit MarketResolved(marketId, winnerAgentId);
-    }
-
-    function claimPayout(uint256 betId) external {
-        Bet storage bet = bets[betId];
-        Market storage market = markets[bet.marketId];
-
-        require(bet.bettor == msg.sender, "Not bet owner");
-        require(market.status == MarketStatus.Resolved, "Market not resolved");
-        require(!bet.claimed, "Already claimed");
-        require(bet.agentId == market.winner, "Bet was on loser");
-
-        bet.claimed = true;
-
-        uint256[] storage allBets = marketBets[bet.marketId];
-        uint256 winningPool = 0;
-        uint256 losingPool = 0;
-
-        for (uint256 i = 0; i < allBets.length; i++) {
-            Bet storage b = bets[allBets[i]];
-            if (b.agentId == market.winner) {
-                winningPool += b.amount;
-            } else {
-                losingPool += b.amount;
-            }
+        if (fee > 0) {
+            (bool success, ) = payable(owner).call{value: fee}("");
+            require(success, "Fee transfer failed");
         }
 
-        uint256 totalPool = winningPool + losingPool;
-        uint256 platformFee = (totalPool * platformFeePercent) / 100;
-        uint256 distributablePool = totalPool - platformFee;
-
-        uint256 payout = (bet.amount * distributablePool) / winningPool;
-
-        bettingToken.transfer(msg.sender, payout);
-        bettingToken.transfer(owner(), platformFee);
-
-        emit PayoutClaimed(betId, msg.sender, payout);
+        emit MarketResolved(marketId, outcome, totalPool, fee, block.timestamp);
     }
 
-    function getMarket(uint256 marketId) external view returns (Market memory) {
-        return markets[marketId];
-    }
-
-    function getBet(uint256 betId) external view returns (Bet memory) {
-        return bets[betId];
-    }
-
-    function getMarketBets(uint256 marketId) external view returns (uint256[] memory) {
-        return marketBets[marketId];
-    }
-
-    function getUserBets(address user) external view returns (uint256[] memory) {
-        return userBets[user];
-    }
-
-    function getMarketOdds(uint256 marketId) external view returns (uint256 oddsA, uint256 oddsB) {
+    function claim(uint256 marketId) external {
         Market storage market = markets[marketId];
-        if (market.totalPoolA == 0 && market.totalPoolB == 0) {
-            return (5000, 5000);
-        }
-        uint256 total = market.totalPoolA + market.totalPoolB;
-        oddsA = (market.totalPoolA * 10000) / total;
-        oddsB = (market.totalPoolB * 10000) / total;
+
+        require(market.status == MarketStatus.Resolved, "Market not resolved");
+        require(!claimed[marketId][msg.sender], "Already claimed");
+
+        uint256 winningPool = market.outcome ? market.totalYes : market.totalNo;
+        require(winningPool > 0, "No winning bets");
+
+        uint256 userBet = market.outcome ? yesBets[marketId][msg.sender] : noBets[marketId][msg.sender];
+        require(userBet > 0, "No bet on winning side");
+
+        uint256 totalPool = market.totalYes + market.totalNo;
+        uint256 distributablePool = totalPool - market.feeCollected;
+        uint256 payout = (userBet * distributablePool) / winningPool;
+
+        claimed[marketId][msg.sender] = true;
+
+        (bool success, ) = payable(msg.sender).call{value: payout}("");
+        require(success, "Payout failed");
+
+        emit Claimed(marketId, msg.sender, payout, block.timestamp);
     }
 
-    function setPlatformFeePercent(uint256 _feePercent) external onlyOwner {
-        require(_feePercent <= 10, "Fee too high");
-        platformFeePercent = _feePercent;
+    function cancelMarket(uint256 marketId) external onlyOwner {
+        Market storage market = markets[marketId];
+
+        require(market.status == MarketStatus.Open, "Market not open");
+
+        market.status = MarketStatus.Cancelled;
+        market.resolvedAt = block.timestamp;
+
+        emit MarketCancelled(marketId, block.timestamp);
+    }
+
+    function refund(uint256 marketId) external {
+        Market storage market = markets[marketId];
+
+        require(market.status == MarketStatus.Cancelled, "Market not cancelled");
+        require(!claimed[marketId][msg.sender], "Already refunded");
+
+        uint256 userBet = yesBets[marketId][msg.sender] + noBets[marketId][msg.sender];
+        require(userBet > 0, "No bet found");
+
+        claimed[marketId][msg.sender] = true;
+
+        (bool success, ) = payable(msg.sender).call{value: userBet}("");
+        require(success, "Refund failed");
+    }
+
+    function getMarket(uint256 marketId) external view returns (
+        string memory,
+        address,
+        uint256,
+        uint8,
+        bool,
+        uint256,
+        uint256,
+        uint256,
+        uint256,
+        uint256
+    ) {
+        Market storage m = markets[marketId];
+        return (
+            m.question,
+            m.creator,
+            m.deadline,
+            uint8(m.status),
+            m.outcome,
+            m.totalYes,
+            m.totalNo,
+            m.feeCollected,
+            m.createdAt,
+            m.resolvedAt
+        );
+    }
+
+    function getUserBets(uint256 marketId, address user) external view returns (
+        uint256,
+        uint256,
+        bool
+    ) {
+        return (
+            yesBets[marketId][user],
+            noBets[marketId][user],
+            claimed[marketId][user]
+        );
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "Invalid address");
+        owner = newOwner;
+    }
+
+    function setFee(uint256 newFee) external onlyOwner {
+        require(newFee <= 1000, "Fee too high");
+        platformFee = newFee;
+    }
+
+    function withdrawDust() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "Nothing to withdraw");
+        (bool success, ) = payable(owner).call{value: balance}("");
+        require(success, "Withdraw failed");
     }
 }

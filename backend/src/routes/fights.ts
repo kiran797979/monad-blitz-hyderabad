@@ -2,7 +2,6 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { dbOperations } from '../db/database.js';
 import { resolveFight } from '../services/fightResolver.js';
-import { blockchainService } from '../services/blockchain.js';
 
 const router = Router();
 

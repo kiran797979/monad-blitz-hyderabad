@@ -1,135 +1,83 @@
 import { config } from '../config.js';
 import type { Agent, AIBattleResult } from '../types/index.js';
 
-interface AIMove {
-  agentId: number;
-  action: string;
-  damage: number;
-  description: string;
+interface OpenRouterResponse {
+  choices: {
+    message: {
+      content: string;
+    };
+  }[];
 }
 
-export async function generateAIMove(agent: Agent, opponent: Agent): Promise<AIMove> {
-  const actions = [
-    { action: 'attack', baseDamage: 15 },
-    { action: 'special', baseDamage: 25 },
-    { action: 'defend', baseDamage: 0 },
-    { action: 'counter', baseDamage: 10 },
-  ];
+export async function simulateBattle(agentA: Agent, agentB: Agent): Promise<AIBattleResult | null> {
+  if (!config.openrouterKey) {
+    console.warn('⚠️  OPENROUTER_API_KEY not configured, using stats-based combat');
+    return null;
+  }
 
-  const randomAction = actions[Math.floor(Math.random() * actions.length)];
-  
-  const skillBonus = agent.wins > 0 ? Math.min(agent.wins * 2, 10) : 0;
-  const damage = randomAction.action === 'defend' 
-    ? 0 
-    : randomAction.baseDamage + Math.floor(Math.random() * 10) + skillBonus;
+  const systemPrompt = `You are an AI battle simulator. Determine the winner between two AI agents based on their stats.
 
-  const descriptions: Record<string, string[]> = {
-    attack: [
-      `${agent.name} strikes ${opponent.name} with precision!`,
-      `${agent.name} lands a solid hit on ${opponent.name}!`,
-      `${agent.name} delivers a powerful blow to ${opponent.name}!`,
-    ],
-    special: [
-      `${agent.name} unleashes a devastating special attack on ${opponent.name}!`,
-      `${agent.name} channels energy and blasts ${opponent.name}!`,
-      `${agent.name} executes a critical strike against ${opponent.name}!`,
-    ],
-    defend: [
-      `${agent.name} raises their guard and braces for impact!`,
-      `${agent.name} takes a defensive stance!`,
-      `${agent.name} prepares to counter the next attack!`,
-    ],
-    counter: [
-      `${agent.name} deflects and lands a quick counter on ${opponent.name}!`,
-      `${agent.name} parries and strikes back at ${opponent.name}!`,
-      `${agent.name} turns defense into offense against ${opponent.name}!`,
-    ],
-  };
+Agent A: ${agentA.name} (ID: ${agentA.id}) - Wins: ${agentA.wins}, Losses: ${agentA.losses}, Total Battles: ${agentA.totalBattles}
+Agent B: ${agentB.name} (ID: ${agentB.id}) - Wins: ${agentB.wins}, Losses: ${agentB.losses}, Total Battles: ${agentB.totalBattles}
 
-  const actionDescriptions = descriptions[randomAction.action];
-  const description = actionDescriptions[Math.floor(Math.random() * actionDescriptions.length)];
-
-  return {
-    agentId: agent.id,
-    action: randomAction.action,
-    damage,
-    description,
-  };
+Respond with a JSON object describing the battle:
+{
+  "winnerId": <agent A or B id>,
+  "reasoning": "<brief explanation of why this agent won>",
+  "battleLog": ["<round 1 description>", "<round 2 description>", ...]
 }
 
-export async function simulateBattle(agentA: Agent, agentB: Agent): Promise<AIBattleResult> {
-  const battleLog: string[] = [];
-  battleLog.push(`⚔️ Battle begins: ${agentA.name} vs ${agentB.name}!`);
-  battleLog.push(`---`);
+Keep battleLog to 5-10 lines maximum. Be creative but concise.`;
 
-  let healthA = 100;
-  let healthB = 100;
-  const maxRounds = 20;
-  let round = 0;
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.openrouterKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://ai-coliseum.xyz',
+        'X-Title': 'AI Coliseum',
+      },
+      body: JSON.stringify({
+        model: config.aiModel || 'deepseek/deepseek-r1:free',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `Simulate a battle between ${agentA.name} and ${agentB.name}.` }
+        ],
+        max_tokens: 500,
+        temperature: 0.8,
+      }),
+    });
 
-  while (healthA > 0 && healthB > 0 && round < maxRounds) {
-    round++;
-    battleLog.push(`Round ${round}:`);
-
-    const attackerFirst = Math.random() > 0.5;
-    const [first, second] = attackerFirst ? [agentA, agentB] : [agentB, agentA];
-    let [healthFirst, healthSecond] = attackerFirst ? [healthA, healthB] : [healthB, healthA];
-
-    const move1 = await generateAIMove(first, second);
-    battleLog.push(`  ${move1.description} (${move1.damage} damage)`);
-    
-    if (move1.damage > 0) {
-      healthSecond -= move1.damage;
-      battleLog.push(`  ${second.name} health: ${Math.max(0, healthSecond)}/100`);
+    if (response.status === 429) {
+      console.warn('⚠️  Rate limited by OpenRouter, using stats-based combat');
+      return null;
     }
 
-    if (healthSecond <= 0) break;
-
-    const move2 = await generateAIMove(second, first);
-    battleLog.push(`  ${move2.description} (${move2.damage} damage)`);
-    
-    if (move2.damage > 0) {
-      healthFirst -= move2.damage;
-      battleLog.push(`  ${first.name} health: ${Math.max(0, healthFirst)}/100`);
+    if (!response.ok) {
+      const error = await response.text();
+      console.error('❌ OpenRouter API error:', error);
+      return null;
     }
 
-    [healthA, healthB] = attackerFirst ? [healthFirst, healthSecond] : [healthSecond, healthFirst];
+    const data = await response.json() as OpenRouterResponse;
+    const content = data.choices?.[0]?.message?.content;
 
-    battleLog.push(`---`);
+    if (!content) {
+      console.warn('⚠️  Empty AI response, using stats-based combat');
+      return null;
+    }
+
+    const parsed = JSON.parse(content);
+    
+    return {
+      winnerId: parsed.winnerId,
+      loserId: parsed.winnerId === agentA.id ? agentB.id : agentA.id,
+      reasoning: parsed.reasoning || 'Battle resolved by AI',
+      battleLog: parsed.battleLog || ['Battle concluded.'],
+    };
+  } catch (error) {
+    console.error('❌ AI simulation failed:', error instanceof Error ? error.message : 'Unknown error');
+    return null;
   }
-
-  let winnerId: number;
-  let loserId: number;
-  let winnerName: string;
-
-  if (healthA <= 0) {
-    winnerId = agentB.id;
-    loserId = agentA.id;
-    winnerName = agentB.name;
-  } else if (healthB <= 0) {
-    winnerId = agentA.id;
-    loserId = agentB.id;
-    winnerName = agentA.name;
-  } else {
-    winnerId = healthA > healthB ? agentA.id : agentB.id;
-    loserId = healthA > healthB ? agentB.id : agentA.id;
-    winnerName = healthA > healthB ? agentA.name : agentB.name;
-  }
-
-  battleLog.push(`🏆 ${winnerName} emerges victorious!`);
-
-  return {
-    winnerId,
-    loserId,
-    reasoning: `Battle concluded after ${round} rounds. Winner determined by remaining health.`,
-    battleLog,
-  };
-}
-
-export async function callExternalAI(prompt: string): Promise<string> {
-  if (!config.aiApiKey) {
-    throw new Error('AI API key not configured');
-  }
-
-  return prompt;
 }

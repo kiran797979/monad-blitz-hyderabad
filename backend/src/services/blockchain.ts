@@ -1,72 +1,92 @@
+import { ethers, JsonRpcProvider, Wallet, Contract } from 'ethers';
 import { config } from '../config.js';
 
-export class BlockchainService {
-  private rpcUrl: string;
-  private initialized: boolean = false;
+let provider: JsonRpcProvider | null = null;
+let signer: Wallet | null = null;
 
-  constructor() {
-    this.rpcUrl = config.monadRpcUrl;
-  }
+const ARENA_ABI = [
+  'function resolveFight(uint256 fightId, address winner)',
+  'function fightCount() view returns (uint256)'
+];
 
+const MARKET_ABI = [
+  'function resolveMarket(uint256 marketId, bool outcome)',
+  'function marketCount() view returns (uint256)'
+];
+
+export const blockchainService = {
   async initialize(): Promise<void> {
-    if (this.initialized) return;
-    
-    this.initialized = true;
-  }
+    if (!config.monadRpc) {
+      console.warn('MONAD_RPC not configured');
+      return;
+    }
 
-  async getBlockNumber(): Promise<number> {
-    return Math.floor(Math.random() * 1000000);
-  }
+    provider = new JsonRpcProvider(config.monadRpc);
 
-  async getBalance(address: string): Promise<bigint> {
-    return BigInt(Math.floor(Math.random() * 1e18));
-  }
+    if (config.privateKey) {
+      signer = new Wallet(config.privateKey, provider);
+      console.log('Blockchain service initialized with signer');
+    } else {
+      console.warn('PRIVATE_KEY not configured - wallet operations disabled');
+    }
+  },
 
-  async getAgentFromContract(agentId: number): Promise<{
-    owner: string;
-    name: string;
-    wins: number;
-    losses: number;
-    stakedAmount: bigint;
-    isActive: boolean;
-  }> {
-    return {
-      owner: '0x' + '0'.repeat(40),
-      name: `Agent ${agentId}`,
-      wins: 0,
-      losses: 0,
-      stakedAmount: 0n,
-      isActive: true,
-    };
-  }
+  async getBlockNumber(): Promise<number | null> {
+    try {
+      if (!provider) return null;
+      return await provider.getBlockNumber();
+    } catch (error) {
+      console.error('Failed to get block number:', error);
+      return null;
+    }
+  },
 
-  async createBattleOnChain(agentA: number, agentB: number, stakeAmount: string): Promise<string> {
-    const txHash = '0x' + Buffer.from(`${agentA}-${agentB}-${stakeAmount}`).toString('hex');
-    return txHash;
-  }
+  async getBalance(address: string): Promise<string | null> {
+    try {
+      if (!provider) return null;
+      const balance = await provider.getBalance(address);
+      return ethers.formatEther(balance);
+    } catch (error) {
+      console.error('Failed to get balance:', error);
+      return null;
+    }
+  },
 
-  async resolveBattleOnChain(battleId: number, winnerId: number): Promise<string> {
-    const txHash = '0x' + Buffer.from(`battle-${battleId}-winner-${winnerId}`).toString('hex');
-    return txHash;
-  }
+  async resolveFightOnChain(fightId: number, winner: string): Promise<string | null> {
+    try {
+      if (!signer || !config.arenaAddress) {
+        console.warn('Signer or ARENA_ADDRESS not configured');
+        return null;
+      }
 
-  async placeBetOnChain(marketId: number, agentId: number, amount: string): Promise<string> {
-    const txHash = '0x' + Buffer.from(`bet-${marketId}-${agentId}-${amount}`).toString('hex');
-    return txHash;
-  }
+      const contract = new Contract(config.arenaAddress, ARENA_ABI, signer);
+      const tx = await contract.resolveFight(fightId, winner);
+      await tx.wait();
+      return tx.hash;
+    } catch (error) {
+      console.error('Failed to resolve fight on chain:', error);
+      return null;
+    }
+  },
 
-  async claimPayoutOnChain(betId: number): Promise<string> {
-    const txHash = '0x' + Buffer.from(`claim-${betId}`).toString('hex');
-    return txHash;
-  }
+  async resolveMarketOnChain(marketId: number, outcome: boolean): Promise<string | null> {
+    try {
+      if (!signer || !config.marketAddress) {
+        console.warn('Signer or MARKET_ADDRESS not configured');
+        return null;
+      }
 
-  async getMarketOdds(marketId: number): Promise<{ oddsA: number; oddsB: number }> {
-    return { oddsA: 0.5, oddsB: 0.5 };
-  }
+      const contract = new Contract(config.marketAddress, MARKET_ABI, signer);
+      const tx = await contract.resolveMarket(marketId, outcome);
+      await tx.wait();
+      return tx.hash;
+    } catch (error) {
+      console.error('Failed to resolve market on chain:', error);
+      return null;
+    }
+  },
 
   isInitialized(): boolean {
-    return this.initialized;
+    return provider !== null;
   }
-}
-
-export const blockchainService = new BlockchainService();
+};

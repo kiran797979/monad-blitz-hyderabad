@@ -5,7 +5,7 @@ import agentsRouter from './routes/agents.js';
 import fightsRouter from './routes/fights.js';
 import marketsRouter from './routes/markets.js';
 import { config, validateConfig } from './config.js';
-import { closeDatabase } from './db/database.js';
+import { initDatabase, closeDatabase } from './db/database.js';
 import { blockchainService } from './services/blockchain.js';
 
 export async function createServer(): Promise<express.Application> {
@@ -13,7 +13,7 @@ export async function createServer(): Promise<express.Application> {
 
   const app = express();
 
-  app.use(cors());
+  app.use(cors({ origin: config.frontendUrl || 'http://localhost:5173', credentials: true }));
   app.use(express.json());
 
   app.use('/health', healthRouter);
@@ -29,6 +29,10 @@ export async function createServer(): Promise<express.Application> {
   app.use((_req: express.Request, res: express.Response) => {
     res.status(404).json({ success: false, error: 'Not found' });
   });
+
+  console.log('✅ Database initializing...');
+  await initDatabase();
+  console.log('✅ Database initialized');
 
   await blockchainService.initialize();
 

@@ -1,172 +1,164 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+contract Arena {
+    address public owner;
+    uint256 public fightCount;
+    uint256 public platformFee = 250;
+    uint256 public totalVolume;
 
-contract Arena is Ownable {
-    IERC20 public immutable stakingToken;
+    mapping(uint256 => Fight) public fights;
+    mapping(address => uint256[]) public userFights;
 
-    struct Agent {
-        address owner;
-        string name;
-        string metadataURI;
-        uint256 wins;
-        uint256 losses;
-        uint256 totalBattles;
-        uint256 stakedAmount;
-        bool isActive;
+    enum FightStatus { Open, Accepted, Resolved, Cancelled }
+
+    struct Fight {
+        address agent1;
+        address agent2;
+        uint256 wager;
+        address winner;
+        FightStatus status;
+        uint256 createdAt;
+        uint256 resolvedAt;
     }
 
-    struct Battle {
-        uint256 agentA;
-        uint256 agentB;
-        uint256 winner;
-        uint256 timestamp;
-        uint256 stakeAmount;
-        BattleStatus status;
+    event FightCreated(uint256 indexed fightId, address indexed agent1, address indexed agent2, uint256 wager, uint256 timestamp);
+    event FightAccepted(uint256 indexed fightId, address indexed agent2, uint256 timestamp);
+    event FightResolved(uint256 indexed fightId, address indexed winner, uint256 winnerPayout, uint256 platformFeePaid, uint256 timestamp);
+    event FightCancelled(uint256 indexed fightId, uint256 refund, uint256 timestamp);
+
+    constructor() {
+        owner = msg.sender;
     }
 
-    enum BattleStatus {
-        Pending,
-        InProgress,
-        Completed,
-        Cancelled
+    receive() external payable {}
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not owner");
+        _;
     }
 
-    uint256 public nextAgentId = 1;
-    uint256 public nextBattleId = 1;
-    uint256 public constant MIN_STAKE = 0.01 ether;
-    uint256 public platformFeePercent = 5;
+    function createChallenge(address opponent) external payable returns (uint256 fightId) {
+        require(msg.value > 0, "Wager required");
+        require(opponent != msg.sender, "Cannot challenge self");
 
-    mapping(uint256 => Agent) public agents;
-    mapping(uint256 => Battle) public battles;
-    mapping(address => uint256[]) public ownerAgents;
-    mapping(uint256 => uint256[]) public agentBattles;
+        fightId = ++fightCount;
 
-    event AgentRegistered(uint256 indexed agentId, address indexed owner, string name);
-    event BattleCreated(uint256 indexed battleId, uint256 agentA, uint256 agentB, uint256 stakeAmount);
-    event BattleCompleted(uint256 indexed battleId, uint256 winner, uint256 loser);
-    event StakeDeposited(uint256 indexed agentId, uint256 amount);
-    event StakeWithdrawn(uint256 indexed agentId, uint256 amount);
-
-    constructor(address _stakingToken) Ownable(msg.sender) {
-        stakingToken = IERC20(_stakingToken);
-    }
-
-    function registerAgent(string calldata name, string calldata metadataURI) external returns (uint256) {
-        require(bytes(name).length > 0, "Name required");
-        require(bytes(name).length <= 32, "Name too long");
-
-        uint256 agentId = nextAgentId++;
-        agents[agentId] = Agent({
-            owner: msg.sender,
-            name: name,
-            metadataURI: metadataURI,
-            wins: 0,
-            losses: 0,
-            totalBattles: 0,
-            stakedAmount: 0,
-            isActive: true
+        fights[fightId] = Fight({
+            agent1: msg.sender,
+            agent2: opponent,
+            wager: msg.value,
+            winner: address(0),
+            status: FightStatus.Open,
+            createdAt: block.timestamp,
+            resolvedAt: 0
         });
 
-        ownerAgents[msg.sender].push(agentId);
+        userFights[msg.sender].push(fightId);
+        if (opponent != address(0)) {
+            userFights[opponent].push(fightId);
+        }
 
-        emit AgentRegistered(agentId, msg.sender, name);
-        return agentId;
+        totalVolume += msg.value;
+
+        emit FightCreated(fightId, msg.sender, opponent, msg.value, block.timestamp);
     }
 
-    function depositStake(uint256 agentId, uint256 amount) external {
-        require(agents[agentId].owner == msg.sender, "Not agent owner");
-        require(agents[agentId].isActive, "Agent not active");
-        require(amount > 0, "Amount must be positive");
+    function acceptChallenge(uint256 fightId) external payable {
+        Fight storage fight = fights[fightId];
 
-        stakingToken.transferFrom(msg.sender, address(this), amount);
-        agents[agentId].stakedAmount += amount;
+        require(fight.status == FightStatus.Open, "Fight not open");
+        require(fight.agent2 == address(0) || fight.agent2 == msg.sender, "Not designated opponent");
+        require(msg.sender != fight.agent1, "Cannot accept own challenge");
+        require(msg.value == fight.wager, "Must match wager");
 
-        emit StakeDeposited(agentId, amount);
+        fight.agent2 = msg.sender;
+        fight.status = FightStatus.Accepted;
+
+        userFights[msg.sender].push(fightId);
+        totalVolume += msg.value;
+
+        emit FightAccepted(fightId, msg.sender, block.timestamp);
     }
 
-    function withdrawStake(uint256 agentId, uint256 amount) external {
-        require(agents[agentId].owner == msg.sender, "Not agent owner");
-        require(agents[agentId].stakedAmount >= amount, "Insufficient stake");
+    function resolveFight(uint256 fightId, address winner) external onlyOwner {
+        Fight storage fight = fights[fightId];
 
-        agents[agentId].stakedAmount -= amount;
-        stakingToken.transfer(msg.sender, amount);
+        require(fight.status == FightStatus.Accepted, "Fight not accepted");
+        require(winner == fight.agent1 || winner == fight.agent2, "Invalid winner");
 
-        emit StakeWithdrawn(agentId, amount);
+        uint256 totalPool = fight.wager * 2;
+        uint256 fee = (totalPool * platformFee) / 10000;
+        uint256 payout = totalPool - fee;
+
+        fight.winner = winner;
+        fight.status = FightStatus.Resolved;
+        fight.resolvedAt = block.timestamp;
+
+        (bool successWinner, ) = payable(winner).call{value: payout}("");
+        require(successWinner, "Winner payout failed");
+
+        (bool successFee, ) = payable(owner).call{value: fee}("");
+        require(successFee, "Fee payout failed");
+
+        emit FightResolved(fightId, winner, payout, fee, block.timestamp);
     }
 
-    function createBattle(uint256 agentA, uint256 agentB, uint256 stakeAmount) external returns (uint256) {
-        require(agentA != agentB, "Cannot battle self");
-        require(agents[agentA].isActive && agents[agentB].isActive, "Agents must be active");
-        require(agents[agentA].stakedAmount >= stakeAmount, "Agent A insufficient stake");
-        require(agents[agentB].stakedAmount >= stakeAmount, "Agent B insufficient stake");
-        require(stakeAmount >= MIN_STAKE, "Stake below minimum");
+    function cancelChallenge(uint256 fightId) external {
+        Fight storage fight = fights[fightId];
 
-        uint256 battleId = nextBattleId++;
-        battles[battleId] = Battle({
-            agentA: agentA,
-            agentB: agentB,
-            winner: 0,
-            timestamp: block.timestamp,
-            stakeAmount: stakeAmount,
-            status: BattleStatus.Pending
-        });
+        require(fight.status == FightStatus.Open, "Fight not open");
+        require(msg.sender == fight.agent1, "Only creator can cancel");
 
-        agentBattles[agentA].push(battleId);
-        agentBattles[agentB].push(battleId);
+        uint256 refund = fight.wager;
+        fight.status = FightStatus.Cancelled;
+        fight.resolvedAt = block.timestamp;
 
-        emit BattleCreated(battleId, agentA, agentB, stakeAmount);
-        return battleId;
+        (bool success, ) = payable(fight.agent1).call{value: refund}("");
+        require(success, "Refund failed");
+
+        emit FightCancelled(fightId, refund, block.timestamp);
     }
 
-    function resolveBattle(uint256 battleId, uint256 winner) external onlyOwner {
-        Battle storage battle = battles[battleId];
-        require(battle.status == BattleStatus.Pending, "Invalid battle status");
-        require(winner == battle.agentA || winner == battle.agentB, "Invalid winner");
-
-        uint256 loser = winner == battle.agentA ? battle.agentB : battle.agentA;
-
-        battle.winner = winner;
-        battle.status = BattleStatus.Completed;
-
-        agents[winner].wins++;
-        agents[winner].totalBattles++;
-        agents[loser].losses++;
-        agents[loser].totalBattles++;
-
-        uint256 totalStake = battle.stakeAmount * 2;
-        uint256 platformFee = (totalStake * platformFeePercent) / 100;
-        uint256 winnerPrize = totalStake - platformFee;
-
-        agents[battle.agentA].stakedAmount -= battle.stakeAmount;
-        agents[battle.agentB].stakedAmount -= battle.stakeAmount;
-
-        stakingToken.transfer(agents[winner].owner, winnerPrize);
-        stakingToken.transfer(owner(), platformFee);
-
-        emit BattleCompleted(battleId, winner, loser);
+    function getFight(uint256 fightId) external view returns (
+        address,
+        address,
+        uint256,
+        address,
+        uint8,
+        uint256,
+        uint256
+    ) {
+        Fight storage f = fights[fightId];
+        return (
+            f.agent1,
+            f.agent2,
+            f.wager,
+            f.winner,
+            uint8(f.status),
+            f.createdAt,
+            f.resolvedAt
+        );
     }
 
-    function getAgent(uint256 agentId) external view returns (Agent memory) {
-        return agents[agentId];
+    function getUserFightIds(address user) external view returns (uint256[] memory) {
+        return userFights[user];
     }
 
-    function getBattle(uint256 battleId) external view returns (Battle memory) {
-        return battles[battleId];
+    function setFee(uint256 newFee) external onlyOwner {
+        require(newFee <= 1000, "Fee too high");
+        platformFee = newFee;
     }
 
-    function getAgentBattles(uint256 agentId) external view returns (uint256[] memory) {
-        return agentBattles[agentId];
+    function withdrawFees() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No fees to withdraw");
+        (bool success, ) = payable(owner).call{value: balance}("");
+        require(success, "Withdraw failed");
     }
 
-    function getOwnerAgents(address owner) external view returns (uint256[] memory) {
-        return ownerAgents[owner];
-    }
-
-    function setPlatformFeePercent(uint256 _feePercent) external onlyOwner {
-        require(_feePercent <= 20, "Fee too high");
-        platformFeePercent = _feePercent;
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "Invalid address");
+        owner = newOwner;
     }
 }
