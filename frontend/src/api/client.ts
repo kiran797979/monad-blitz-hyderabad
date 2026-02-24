@@ -35,10 +35,14 @@ function mapMarket(m: any) {
   return {
     id: m.id,
     battleId: m.battle_id ?? m.battleId,
-    question: m.question,
+    question: m.question ?? `Who wins Fight #${m.battle_id ?? m.battleId}?`,
     status: m.status,
     winner: m.winner,
     totalPool: m.total_pool ?? m.totalPool ?? '0',
+    agentA: m.agent_a ?? m.agentA,
+    agentB: m.agent_b ?? m.agentB,
+    totalPoolA: m.total_pool_a ?? m.totalPoolA ?? '0',
+    totalPoolB: m.total_pool_b ?? m.totalPoolB ?? '0',
   }
 }
 
@@ -63,7 +67,23 @@ export const getMarkets = async () => {
 }
 export const getMarket = async (id: number) => mapMarket(await get(`/markets/${id}`))
 export const createMarket = (payload: any) => post('/markets', payload)
-export const placeBet = (marketId: number, payload: any) => post(`/markets/${marketId}/bet`, payload)
+export const placeBet = async (marketId: number, payload: { bettor?: string; agentId: number; amount: string }) => {
+  const body = {
+    bettor: payload.bettor || '0x0000000000000000000000000000000000000000',
+    agentId: Number(payload.agentId),
+    amount: String(payload.amount),
+  }
+  console.log('Placing bet:', marketId, body) // Debug log
+  const res = await fetch(API_BASE + `/markets/${marketId}/bet`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const json = await res.json()
+  console.log('Bet response:', json) // Debug log
+  if (!res.ok) throw new Error(json?.error || json?.message || res.statusText)
+  return json?.data ?? json
+}
 export const getOdds = (marketId: number) => get(`/markets/${marketId}/odds`)
 export const resolveMarket = (marketId: number, winner: number) => post(`/markets/${marketId}/resolve`, { winner })
 export const getBets = (marketId: number) => get(`/markets/${marketId}/bets`)

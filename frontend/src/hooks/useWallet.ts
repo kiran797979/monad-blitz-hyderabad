@@ -17,7 +17,6 @@ export const useWallet = () => {
     chainId: null,
   })
 
-  // Auto-reconnect if already connected
   useEffect(() => {
     const tryReconnect = async () => {
       try {
@@ -44,11 +43,19 @@ export const useWallet = () => {
       const balBig = await provider.getBalance(address)
       const balance = parseFloat(ethers.formatUnits(balBig, 18)).toFixed(4)
       const network = await provider.getNetwork()
-      const chainId = Number(network.chainId) // Convert BigInt to number
+
+      // Force convert to plain number — ethers v6 returns BigInt
+      let chainId: number | null = null
+      try {
+        chainId = Number(BigInt(network.chainId))
+      } catch {
+        chainId = Number(network.chainId)
+      }
+
+      console.log('Wallet connected. ChainId:', chainId, typeof chainId)
 
       setState({ address, connected: true, balance, chainId })
 
-      // Listen for changes
       try {
         (window as any).ethereum.on('accountsChanged', () => window.location.reload())
         ;(window as any).ethereum.on('chainChanged', () => window.location.reload())
