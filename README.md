@@ -814,7 +814,7 @@ This project is licensed under the **MIT License** — see [LICENSE](LICENSE) fo
 
 <div align="center">
 
-### Built for **Monad Blitz Hackathon 2025** 🏗️
+### Built for **Monad Blitz Hackathon 2026** 🏗️
 
 <br />
 
