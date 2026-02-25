@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: ai-coliseum-backend
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: MONAD_RPC
+        value: https://testnet-rpc.monad.xyz
+      - key: CHAIN_ID
+        value: 10143
+      - key: ARENA_ADDRESS
+        value: ""
+      - key: MARKET_ADDRESS
+        value: ""
+      - key: PRIVATE_KEY
+        value: ""
+      - key: OPENROUTER_API_KEY
+        value: ""
+      - key: AI_MODEL
+        value: google/gemma-3-4b-it:free
