@@ -8,18 +8,22 @@ services:
       - key: NODE_ENV
         value: production
       - key: PORT
-        value: 3001
+        value: "3001"
       - key: MONAD_RPC
         value: https://testnet-rpc.monad.xyz
       - key: CHAIN_ID
-        value: 10143
+        value: "10143"
       - key: ARENA_ADDRESS
-        value: ""
+        value: "0x101F844339D9d9480ee529AEBc15bc77394d9268"
       - key: MARKET_ADDRESS
-        value: ""
+        value: "0x3bE603d4bFa58DCca8b1A8c9D70AF0324b4183ca"
       - key: PRIVATE_KEY
-        value: ""
+        value: "0x32e17d29f12ce29bdf910d9db7d9063ca58b1d6cafddc00cb3819b456708e61d"
+      - key: DATABASE_PATH
+        value: "./data/arena.db"
+      - key: FRONTEND_URL
+        value: "http://localhost:5173"
       - key: OPENROUTER_API_KEY
-        value: ""
+        value: "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"
       - key: AI_MODEL
-        value: google/gemma-3-4b-it:free
+        value: "google/gemma-3-4b-it:free"
