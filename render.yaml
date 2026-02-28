@@ -27,4 +27,5 @@ services:
         value: "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"
       - key: AI_MODEL
         value: "google/gemma-3-4b-it:free"
+
 HI
