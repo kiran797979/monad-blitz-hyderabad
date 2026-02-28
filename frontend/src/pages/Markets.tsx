@@ -22,7 +22,7 @@ type FilterKey = (typeof FILTERS)[number]['key']
 export default function Markets() {
   const [markets, setMarkets] = useState<Market[]>([])
   const [fights, setFights] = useState<Fight[]>([])
-  const [agents, setAgents] = useState<Agent[]>([])
+  const [_agents, setAgents] = useState<Agent[]>([])
   const [agentMap, setAgentMap] = useState<Record<number, string>>({})
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<FilterKey>('all')
