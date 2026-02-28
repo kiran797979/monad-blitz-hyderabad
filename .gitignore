@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .env
+.env.local
 *.db
 *.db-wal
 *.db-shm
@@ -8,8 +9,6 @@ data/
 .DS_Store
 .vscode/
 *.log
-
-<<<<<<< HEAD
-=======
-
->>>>>>> be8b9f0437915f6b525efbbc79a801d1cbf26ffa
+*.tsbuildinfo
+vite.config.d.ts
+vite.config.js
