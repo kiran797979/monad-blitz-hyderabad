@@ -24,7 +24,7 @@ services:
       - key: FRONTEND_URL
         value: "http://localhost:5173"
       - key: OPENROUTER_API_KEY
-        value: "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"
+        value: 
       - key: AI_MODEL
         value: "google/gemma-3-4b-it:free"
 
