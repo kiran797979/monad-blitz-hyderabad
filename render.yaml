@@ -28,4 +28,3 @@ services:
       - key: AI_MODEL
         value: "google/gemma-3-4b-it:free"
 
-HI
